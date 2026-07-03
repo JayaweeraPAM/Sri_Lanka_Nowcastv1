@@ -1,0 +1,30 @@
+# Sri Lanka Nowcast — central config
+paths:
+  raw_dir: "data/raw"
+  extracted_dir: "data/extracted"
+  processed_dir: "data/processed"
+  checkpoints_dir: "checkpoints"
+  outputs_dir: "outputs"
+
+eumetsat:
+  collection_id: "EO:EUM:DAT:MSG:CTH-IODC"
+
+download:
+  start_date: "2024-01-01"
+  end_date: "2024-03-01"
+  chunk_days: 7
+
+region:
+  lat_min: 5.8
+  lat_max: 9.9
+  lon_min: 79.6
+  lon_max: 82.0
+
+grid:
+  target_size: 128
+  max_height_m: 18000.0
+  qi_threshold: null
+
+sequence:
+  input_frames: 12
+  target_frames: 6

@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ceylon Skies — Satellite Cloud Cover</title>
+<meta name="description" content="Real-time EUMETSAT cloud mask and NASA GIBS satellite imagery over Sri Lanka with AI nowcasting.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --bg-0:#05060a;
+    --panel:rgba(15,18,32,0.65);
+    --panel-border:rgba(255,255,255,0.12);
+    --panel-border-hover:rgba(255,255,255,0.18);
+    --accent:#0ea5e9;
+    --accent-2:#3b82f6;
+    --accent-glow:rgba(14, 165, 233, 0.4);
+    --text-hi:#f8fafc;
+    --text-mid:#cbd5e1;
+    --text-low:#64748b;
+    --good:#10b981;
+    --good-glow:rgba(16,185,129,0.3);
+    --warn:#f59e0b;
+    --bad:#ef4444;
+    --radius:14px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{
+    height:100%;
+    font-family:'Inter',Arial,sans-serif;
+    background:var(--bg-0);
+    color:var(--text-hi);
+    overflow:hidden;
+  }
+  #app{ position:relative; height:100vh; width:100vw; }
+
+  #map{
+    position:absolute; inset:0;
+    background: radial-gradient(circle at 30% 20%, #101830 0%, #05060a 60%);
+    z-index: 100;
+  }
+
+  #cloud3d{
+    position:absolute; inset:0; z-index: 400;
+    pointer-events:none;
+    /* Optional: mix-blend-mode: screen; to make it blend softly */
+  }
+
+  .leaflet-tile-pane{ filter: saturate(1.02); }
+
+  .leaflet-control-zoom {
+    border: none !important; box-shadow: none !important;
+    top: 76px !important; right: 16px !important;
+  }
+  .leaflet-control-zoom a {
+    width: 36px !important; height: 36px !important; line-height: 36px !important;
+    background: rgba(15,18,32,0.75) !important; backdrop-filter: blur(12px) !important;
+    border: 1px solid var(--panel-border) !important; border-radius: 10px !important;
+    color: var(--text-mid) !important; font-size: 18px !important;
+    margin-bottom: 6px !important; transition: all 0.2s ease !important;
+  }
+  .leaflet-control-zoom a:hover {
+    background: rgba(255,255,255,0.1) !important; color: var(--text-hi) !important;
+    border-color: var(--panel-border-hover) !important;
+  }
+  .leaflet-control-attribution {
+    background: rgba(15,18,32,0.6) !important; backdrop-filter: blur(12px) !important;
+    color: var(--text-low) !important; font-size: 10px !important;
+    border-top: 1px solid var(--panel-border) !important;
+    padding: 3px 8px !important;
+  }
+  .leaflet-control-attribution a { color: var(--text-mid) !important; }
+
+  #navbar, #sidebar, #timebar, .side-toggle-btn, .side-toggle-label, #openSidebarBtn { z-index: 1000 !important; }
+
+  /* Navbar */
+  #navbar{
+    position:absolute; top:0; left:0; right:0; height:64px;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 24px; background:rgba(15,18,32,0.6); backdrop-filter:blur(24px);
+    border-bottom:1px solid var(--panel-border);
+  }
+  .brand{ display:flex; align-items:center; gap:12px; font-weight:700; font-size:16px; letter-spacing:-0.02em; }
+  .brand .dot{
+    width:11px; height:11px; border-radius:50%;
+    background:linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow:0 0 16px var(--accent-glow);
+  }
+  .brand small{ display:block; color:var(--text-low); font-weight:500; font-size:11px; margin-top:2px; letter-spacing:0.02em; }
+  .nav-right{ display:flex; align-items:center; gap:18px; font-size:12px; color:var(--text-mid); }
+  .status-pill{
+    display:flex; align-items:center; gap:8px;
+    background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4);
+    color:var(--good); padding:6px 14px; border-radius:24px; font-weight:600; font-size:11px; letter-spacing:0.05em;
+  }
+  .status-pill .blip{
+    width:8px; height:8px; border-radius:50%; background:var(--good);
+    animation:pulse-glow 2s ease-in-out infinite;
+  }
+  @keyframes pulse-glow{ 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.6;transform:scale(1.1);} }
+  #clock{ font-variant-numeric: tabular-nums; color:var(--text-hi); font-weight:600; font-size:13px; letter-spacing:0.01em; }
+  .icon-btn{
+    width:38px; height:38px; border-radius:12px;
+    background:rgba(255,255,255,0.06); border:1px solid var(--panel-border);
+    color:var(--text-mid); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; font-size:16px; transition:.2s ease;
+  }
+  .icon-btn:hover{ background:rgba(255,255,255,0.12); color:var(--text-hi); border-color:var(--panel-border-hover); }
+
+  /* Sidebar */
+  #sidebar{
+    position:absolute; top:72px; left:16px; z-index:999; width:290px;
+    max-height: calc(100vh - 190px); background:rgba(15,18,32,0.55);
+    backdrop-filter:blur(28px); border:1px solid var(--panel-border);
+    border-radius:var(--radius); padding:18px; overflow-y:auto;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+  }
+  #sidebar::-webkit-scrollbar{ width:4px; }
+  #sidebar::-webkit-scrollbar-track{ background:transparent; }
+  #sidebar::-webkit-scrollbar-thumb{ background:rgba(255,255,255,0.1); border-radius:4px; }
+  #sidebar.collapsed{ transform: translateX(-340px); opacity:0; pointer-events:none; }
+
+  .section-label{font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-low); font-weight:700; margin:20px 0 12px;}
+  .section-label:first-child{ margin-top:0; }
+
+  .layer-grid{display:grid; grid-template-columns:1fr 1fr; gap:6px; background:rgba(255,255,255,0.03); padding:4px; border-radius:10px; border:1px solid var(--panel-border);}
+  .layer-btn{border:none; background:transparent; border-radius:8px; padding:8px 8px; text-align:center; cursor:pointer; color:var(--text-mid); font-size:10px; font-weight:600; transition: all 0.2s ease;}
+  .layer-btn:hover{background:rgba(255,255,255,0.06);}
+  .layer-btn.active{background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:white; box-shadow:0 2px 10px var(--accent-glow);}
+  .layer-btn .layer-icon{font-size:16px; display:block; margin-bottom:3px;}
+
+  .field-label{font-size:11px; color:var(--text-mid); margin-bottom:6px; display:block; font-weight:500;}
+  .helper-text{font-size:10.5px; color:var(--text-low); line-height:1.5; margin-top:10px;}
+  input[type="range"]{
+    -webkit-appearance:none; appearance:none;
+    width:100%; height:4px; border-radius:2px; outline:none; margin-top:8px;
+    background:rgba(255,255,255,0.12);
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none;
+    width:14px; height:14px; border-radius:50%;
+    background:linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow:0 0 8px var(--accent-glow);
+    cursor:pointer;
+  }
+  .range-val{font-size:11px; color:var(--text-low); float:right; font-weight:500;}
+
+  .row-btn{
+    margin-top:10px; width:100%; padding:11px; border:none; border-radius:10px;
+    background:linear-gradient(135deg, var(--accent), var(--accent-2));
+    color:white; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif;
+    font-size:12px; transition: all 0.2s ease; letter-spacing:0.01em;
+  }
+  .row-btn:hover{ box-shadow:0 4px 16px var(--accent-glow); transform:translateY(-1px); }
+  .row-btn.ghost{
+    background:rgba(255,255,255,0.05); border:1px solid var(--panel-border); color:var(--text-mid);
+    box-shadow:none;
+  }
+  .row-btn.ghost:hover{ background:rgba(255,255,255,0.1); color:var(--text-hi); transform:translateY(-1px); }
+
+  .status-card{background:rgba(255,255,255,0.04); border:1px solid var(--panel-border); border-radius:12px; padding:12px 14px; margin-top:10px;}
+  .status-row{display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--text-mid); padding:5px 0;}
+  .status-row .label{ color:var(--text-low); }
+  .status-row .value{ color:var(--text-hi); font-weight:600; font-size:11px; }
+  .badge{padding:3px 10px; border-radius:20px; font-size:10px; font-weight:700; letter-spacing:0.03em;}
+  .badge.green{background:rgba(16,185,129,0.18); color:var(--good); border:1px solid rgba(16,185,129,0.35);}
+  .badge.red{background:rgba(239,68,68,0.18); color:var(--bad); border:1px solid rgba(239,68,68,0.35);}
+  .badge.amber{background:rgba(245,158,11,0.18); color:var(--warn); border:1px solid rgba(245,158,11,0.35);}
+
+  /* Timebar */
+  #timebar{
+    position:absolute; left:16px; right:16px; bottom:8px; z-index:999;
+    background:rgba(15,18,32,0.55); backdrop-filter:blur(28px);
+    border:1px solid var(--panel-border); border-radius:var(--radius); padding:10px 16px 12px;
+    display:flex; align-items:center;
+  }
+  .timebar-head{ flex-shrink:0; margin-right:16px; }
+  .timebar-title{ font-size:12px; color:var(--text-mid); font-weight:500; white-space:nowrap; }
+  .timebar-title b{ color:var(--text-hi); font-weight:700; }
+  .timebar-note{ flex-shrink:0; margin-left:16px; font-size:10px; color:var(--text-low); white-space:nowrap; font-style:italic; }
+  .timeline{display:flex; align-items:center; gap:6px; flex:1; min-width:0;}
+  .slot{
+    flex:1; text-align:center; padding:6px 4px; border-radius:8px; cursor:pointer;
+    border:1px solid transparent; transition: all 0.2s ease; min-width:0;
+  }
+  .slot:hover{ background:rgba(255,255,255,0.06); border-color:var(--panel-border); }
+  .slot.active{background:linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.2)); border-color:var(--accent);}
+  .slot .t{ font-size:11px; font-weight:600; color:var(--text-hi); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .slot .l{ font-size:9px; color:var(--text-low); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* Layer toggle */
+  .side-toggle-btn{
+    position:absolute; top:150px; right:16px;
+    width:40px; height:40px; border-radius:12px;
+    background:rgba(15,18,32,0.7); backdrop-filter:blur(12px);
+    border:1px solid var(--panel-border);
+    color:var(--text-mid); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition: all 0.2s ease;
+  }
+  .side-toggle-btn svg{ width:18px; height:18px; }
+  .side-toggle-btn:hover{ background:rgba(255,255,255,0.1); color:var(--text-hi); border-color:var(--panel-border-hover); }
+  .side-toggle-btn.active{ background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:white; border-color:transparent; box-shadow:0 2px 12px var(--accent-glow); }
+  .side-toggle-label{
+    position:absolute; top:196px; right:16px;
+    font-size:10px; font-weight:600; color:var(--text-low);
+    text-align:center; width:40px; letter-spacing:0.02em;
+  }
+
+  #openSidebarBtn{
+    position:absolute; top:72px; left:16px;
+    display:none;
+  }
+  #sidebar.collapsed ~ #openSidebarBtn{ display:flex; }
+
+  #dateSelector{
+    width:100%; padding:9px 12px; border-radius:10px;
+    background:rgba(255,255,255,0.06); border:1px solid var(--panel-border);
+    color:var(--text-hi); font-family:'Inter',sans-serif; font-size:12px;
+    outline:none; transition: border-color 0.2s ease;
+  }
+  #dateSelector:focus{ border-color:var(--accent); }
+  #dateSelector::-webkit-calendar-picker-indicator{ filter:invert(0.7); }
+
+  .sidebar-divider{
+    height:1px; background:var(--panel-border); margin:16px 0; border:none;
+  }
+
+  /* Toggle Switch */
+  .switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .4s; border-radius: 20px; border: 1px solid var(--panel-border); }
+  .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background-color: var(--text-mid); transition: .4s; border-radius: 50%; }
+  input:checked + .slider { background-color: var(--good); border-color: var(--good); }
+  input:checked + .slider:before { transform: translateX(16px); background-color: #fff; }
+
+  /* Loading indicator */
+  .loading-spinner{
+    display:none; align-items:center; gap:8px; margin-top:10px;
+    font-size:11px; color:var(--text-low);
+  }
+  .loading-spinner.show{ display:flex; }
+  .spinner{
+    width:14px; height:14px; border:2px solid rgba(255,255,255,0.1);
+    border-top-color:var(--accent); border-radius:50%;
+    animation:spin 0.8s linear infinite;
+  }
+  @keyframes spin{ to{transform:rotate(360deg);} }
+
+  /* Legend */
+  .legend{
+    margin-top:12px; padding:10px 12px; border-radius:10px;
+    background:rgba(255,255,255,0.04); border:1px solid var(--panel-border);
+  }
+  .legend-title{ font-size:10px; font-weight:700; color:var(--text-low); text-transform:uppercase; letter-spacing:0.1em; margin-bottom:8px; }
+  .legend-item{ display:flex; align-items:center; gap:8px; font-size:10.5px; color:var(--text-mid); padding:3px 0; }
+  .legend-swatch{
+    width:14px; height:14px; border-radius:4px; flex-shrink:0;
+    border:1px solid rgba(255,255,255,0.1);
+  }
+  
+  /* Right Bar (Legend) */
+  #rightbar{
+    position:absolute; top:220px; right:16px; z-index:999;
+    background:rgba(15,18,32,0.65); backdrop-filter:blur(28px);
+    border:1px solid var(--panel-border); border-radius:var(--radius);
+    padding:16px 12px; display:flex; flex-direction:column; align-items:center;
+    transition: opacity 0.3s ease;
+  }
+  .colorbar-title{
+    font-size:10px; font-weight:700; color:var(--text-mid);
+    text-transform:uppercase; letter-spacing:0.05em; margin-bottom:12px;
+    writing-mode: vertical-rl; transform: rotate(180deg);
+  }
+  .colorbar-wrap{
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+  }
+  .colorbar{
+    width:12px; height:150px; border-radius:6px;
+    background: linear-gradient(to top, #00007F, #0000FF, #007FFF, #00FFFF, #7FFF7F, #FFFF00, #FF7F00, #FF0000, #7F0000);
+    border:1px solid rgba(255,255,255,0.2);
+  }
+  .colorbar-label{
+    font-size:10px; font-weight:600; color:var(--text-hi);
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <canvas id="cloud3d"></canvas>
+
+  <div id="navbar">
+    <div class="brand">
+      <div class="dot"></div>
+      <div>Ceylon Skies <small>NASA Satellite Cloud Imagery - Sri Lanka</small></div>
+    </div>
+    <div class="nav-right">
+      <div id="clock">--:--:--</div>
+      <div class="status-pill"><div class="blip"></div> EUMETSAT</div>
+      <div class="icon-btn" id="toggleSidebarNav">☰</div>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="section-label" style="margin-top:0;">Imagery</div>
+    <label class="field-label">Layer opacity <span class="range-val" id="opacityVal">100%</span></label>
+    <input type="range" id="opacitySlider" min="0" max="100" value="100">
+
+    <div class="section-label">Cloud Layer</div>
+    <div class="layer-grid">
+      <div class="layer-btn" data-layer="eumetsat_clm" id="btn-eumetsat_clm">
+        <span class="layer-icon">🛰️</span>EUMETSAT Cloud Mask
+      </div>
+      <div class="layer-btn active" data-layer="eumetsat_cth" id="btn-eumetsat_cth">
+        <span class="layer-icon">📏</span>Cloud Top Height
+      </div>
+      <div class="layer-btn" data-layer="gibs_viirs" id="btn-gibs_viirs">
+        <span class="layer-icon">🌍</span>NASA VIIRS True Color
+      </div>
+      <div class="layer-btn" data-layer="none" id="btn-none">
+        <span class="layer-icon">✕</span>None
+      </div>
+    </div>
+
+    <p class="helper-text">EUMETSAT Cloud Mask (MSG-IODC) provides real-time cloud cover classification from geostationary orbit. Updated every 15 minutes. NASA VIIRS provides daily true-color satellite imagery.</p>
+
+    <div class="legend" id="clmLegend">
+      <div class="legend-title">Cloud Mask Legend</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#00bfff;"></div> Cloud-free ocean</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#228b22;"></div> Cloud-free land</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#ffffff;"></div> Cloudy</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#888;"></div> Unprocessed</div>
+    </div>
+
+    <hr class="sidebar-divider">
+
+    <div class="section-label">Date & Live Mode</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <span class="field-label" style="margin-bottom:0;">Live Auto-Refresh (1s)</span>
+      <label class="switch">
+        <input type="checkbox" id="liveToggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <p class="helper-text" style="margin-top:0; margin-bottom:10px;">Pick a date (today or any day back to Nov 2015)</p>
+    <input type="date" id="dateSelector" />
+    <button class="row-btn" onclick="loadForSelectedDate()">Load Satellite Pass</button>
+    <button class="row-btn ghost" onclick="jumpToLatest()" style="margin-top:6px;">Jump to Latest</button>
+    <p class="helper-text">EUMETSAT cloud mask updates every 15 min from geostationary orbit. NASA VIIRS publishes one pass per day, roughly 3-5 hours after acquisition.</p>
+
+    <hr class="sidebar-divider">
+
+    <div class="section-label">System Status</div>
+    <div class="status-card">
+      <div class="status-row">
+        <span class="label">Cloud source</span>
+        <span class="badge green" id="sourceLabel">EUMETSAT</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Layer</span>
+        <span class="value" id="layerNameLabel">MSG Cloud Mask (IODC)</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Tile status</span>
+        <span class="badge green" id="tileStatusBadge">LOADED</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Tiles loaded</span>
+        <span class="value" id="tileCount">0</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Showing pass from</span>
+        <span class="value" id="showingDate">—</span>
+      </div>
+    </div>
+
+    <hr class="sidebar-divider">
+
+    <div class="section-label">AI Nowcast Model</div>
+    <div class="status-card">
+      <div class="status-row">
+        <span class="label">ConvLSTM engine</span>
+        <span class="badge red" id="aiStatusBadge">NOT CONNECTED</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Forecast horizon</span>
+        <span class="value" id="forecastHorizon">—</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Last trained</span>
+        <span class="value" id="lastTrained">—</span>
+      </div>
+    </div>
+    <div class="loading-spinner" id="loadingIndicator">
+      <div class="spinner"></div>
+      <span>Loading tiles…</span>
+    </div>
+  </div>
+
+  <div class="icon-btn" id="openSidebarBtn">☰</div>
+
+  <div class="side-toggle-btn active" id="cloudLayerToggleBtn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+      <polyline points="2 17 12 22 22 17"></polyline>
+      <polyline points="2 12 12 17 22 12"></polyline>
+    </svg>
+  </div>
+  <div class="side-toggle-label" id="cloudLayerToggleLabel">Layer: On</div>
+
+  <div id="rightbar" style="display:none;">
+    <div class="colorbar-title">Top Height</div>
+    <div class="colorbar-wrap">
+      <div class="colorbar-label">High</div>
+      <div class="colorbar"></div>
+      <div class="colorbar-label">Low</div>
+    </div>
+  </div>
+
+  <div id="timebar">
+    <div class="timebar-head">
+      <div class="timebar-title">Satellite pass — <b id="selectedTimeLabel">Live</b></div>
+    </div>
+    <div class="timeline" id="timeline"></div>
+    <div class="timebar-note">Real satellite imagery, updated live</div>
+  </div>
+</div>
+
+<script>
+// ================= MAP SETUP =================
+const bounds = L.latLngBounds([5.7, 79.5], [10.1, 82.1]);
+const map = L.map('map', {
+  center: [7.8731, 80.7718], zoom: 7, minZoom: 6, maxZoom: 9,
+  maxBounds: bounds.pad(0.6), maxBoundsViscosity: 0.8, zoomControl: false,
+  attributionControl: true
+});
+L.control.zoom({ position: 'topright' }).addTo(map);
+
+// High-res satellite base map
+const satBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 9,
+  attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+});
+satBase.addTo(map);
+
+// ================= LAYER DEFINITIONS =================
+const EUMETSAT_WMS = 'https://view.eumetsat.int/geoserver/wms';
+const GIBS_TEMPLATE = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/{date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg';
+
+let activeOverlay = null;
+let activeLayerKey = 'none'; // Will be set on init
+let layerVisible = true;
+let tilesLoaded = 0;
+
+// 3D Globals
+let renderer3d, scene3d, camera3d, material3d, plane3d;
+let is3DActive = false;
+
+// Layer configurations
+const layerConfigs = {
+  eumetsat_clm: {
+    name: 'MSG Cloud Mask (IODC)',
+    source: 'EUMETSAT',
+    create: () => L.tileLayer.wms(EUMETSAT_WMS, {
+      layers: 'msg_iodc:clm',
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      attribution: '&copy; <a href="https://www.eumetsat.int/">EUMETSAT</a> MSG Cloud Mask'
+    })
+  },
+  eumetsat_cth: {
+    name: 'MSG Cloud Top Height (IODC)',
+    source: 'EUMETSAT',
+    create: () => L.tileLayer.wms(EUMETSAT_WMS, {
+      layers: 'msg_iodc:cth',
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      attribution: '&copy; <a href="https://www.eumetsat.int/">EUMETSAT</a> MSG Cloud Top Height'
+    })
+  },
+  gibs_viirs: {
+    name: 'VIIRS True Color',
+    source: 'NASA GIBS',
+    create: (dateStr) => {
+      const d = dateStr || todayStr();
+      const url = GIBS_TEMPLATE.replace('{date}', d);
+      return L.tileLayer(url, {
+        maxZoom: 9,
+        tileSize: 256,
+        attribution: 'Imagery courtesy <a href="https://earthdata.nasa.gov/gibs">NASA EOSDIS GIBS</a> / Suomi NPP VIIRS'
+      });
+    }
+  }
+};
+
+// ================= LAYER MANAGEMENT =================
+function loadOverlay(layerKey, dateStr) {
+  const loader = document.getElementById('loadingIndicator');
+  loader.classList.add('show');
+  document.getElementById('tileStatusBadge').textContent = 'LOADING';
+  document.getElementById('tileStatusBadge').className = 'badge amber';
+  tilesLoaded = 0;
+  document.getElementById('tileCount').textContent = '0';
+
+  // Remove old layer
+  if (activeOverlay && map.hasLayer(activeOverlay)) {
+    map.removeLayer(activeOverlay);
+  }
+  activeOverlay = null;
+  
+  is3DActive = false;
+  document.getElementById('cloud3d').style.display = 'none';
+
+  if (layerKey === 'none') {
+    loader.classList.remove('show');
+    document.getElementById('tileStatusBadge').textContent = 'OFF';
+    document.getElementById('tileStatusBadge').className = 'badge amber';
+    document.getElementById('sourceLabel').textContent = '—';
+    document.getElementById('layerNameLabel').textContent = 'None';
+    document.getElementById('showingDate').textContent = '—';
+    activeLayerKey = 'none';
+    updateLayerBtnUI();
+    updateLegend();
+    return;
+  }
+
+  const config = layerConfigs[layerKey];
+  if (!config) return;
+
+  activeLayerKey = layerKey;
+
+  if (layerKey === 'eumetsat_cth') {
+    is3DActive = true;
+    if (layerVisible) {
+      document.getElementById('cloud3d').style.display = 'block';
+      update3DTexture();
+    }
+  } else {
+    activeOverlay = config.create(dateStr);
+
+    // Track tile loading
+    activeOverlay.on('tileloadstart', () => {
+      tilesLoaded++;
+      document.getElementById('tileCount').textContent = tilesLoaded;
+    });
+
+    activeOverlay.on('load', () => {
+      loader.classList.remove('show');
+      document.getElementById('tileStatusBadge').textContent = 'LOADED';
+      document.getElementById('tileStatusBadge').className = 'badge green';
+    });
+
+    activeOverlay.on('tileerror', () => {
+      document.getElementById('tileStatusBadge').textContent = 'ERROR';
+      document.getElementById('tileStatusBadge').className = 'badge red';
+    });
+
+    // Set opacity
+    const opacity = document.getElementById('opacitySlider').value / 100;
+    activeOverlay.setOpacity(opacity);
+
+    if (layerVisible) {
+      activeOverlay.addTo(map);
+    }
+  }
+
+  // Update status UI
+  document.getElementById('sourceLabel').textContent = config.source;
+  document.getElementById('sourceLabel').className = 'badge green';
+  document.getElementById('layerNameLabel').textContent = config.name;
+
+  if (layerKey === 'gibs_viirs') {
+    const d = dateStr || todayStr();
+    document.getElementById('showingDate').textContent = d;
+    document.getElementById('selectedTimeLabel').textContent = d;
+  } else {
+    // EUMETSAT is live
+    document.getElementById('showingDate').textContent = 'Live (real-time)';
+    document.getElementById('selectedTimeLabel').textContent = 'Live';
+  }
+
+  updateLayerBtnUI();
+  updateLegend();
+}
+
+function updateLayerBtnUI() {
+  document.querySelectorAll('.layer-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.layer === activeLayerKey);
+  });
+}
+
+function updateLegend() {
+  const legend = document.getElementById('clmLegend');
+  const rightbar = document.getElementById('rightbar');
+  if (activeLayerKey === 'eumetsat_clm') {
+    legend.style.display = 'block';
+  } else {
+    legend.style.display = 'none';
+  }
+  
+  if (activeLayerKey === 'eumetsat_cth') {
+    rightbar.style.display = 'flex';
+  } else {
+    rightbar.style.display = 'none';
+  }
+}
+
+// ================= DATE HELPERS =================
+function ymd(d) { return d.toISOString().split('T')[0]; }
+function todayStr() { return ymd(new Date()); }
+
+function loadForSelectedDate() {
+  const dateInput = document.getElementById('dateSelector').value;
+  if (!dateInput) return;
+
+  if (activeLayerKey === 'gibs_viirs') {
+    loadOverlay('gibs_viirs', dateInput);
+  } else {
+    // EUMETSAT is always live, but update label
+    document.getElementById('selectedTimeLabel').textContent = dateInput;
+  }
+  highlightActiveSlot(dateInput);
+}
+
+function jumpToLatest() {
+  const today = todayStr();
+  document.getElementById('dateSelector').value = today;
+  document.getElementById('selectedTimeLabel').textContent = 'Live';
+
+  if (activeLayerKey === 'gibs_viirs') {
+    loadOverlay('gibs_viirs', today);
+  } else {
+    document.getElementById('showingDate').textContent = 'Live (real-time)';
+  }
+  highlightActiveSlot(today);
+}
+
+// ================= CLOCK =================
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-GB');
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ================= LIVE AUTO-REFRESH =================
+let liveRefreshInterval = null;
+let loopOffsetIndex = -8; // 2 hours of data (15-min intervals)
+
+function getNearest15MinDate(date) {
+  const coeff = 1000 * 60 * 15;
+  return new Date(Math.floor(date.getTime() / coeff) * coeff);
+}
+
+function refreshActiveLayer() {
+  if (activeLayerKey === 'none' || activeLayerKey === 'gibs_viirs') return;
+  
+  // Calculate frame time (EUMETSAT latency is usually ~20-30 mins, we subtract 30m as base)
+  let baseTime = getNearest15MinDate(new Date(Date.now() - 30 * 60000));
+  let frameTime = new Date(baseTime.getTime() + (loopOffsetIndex * 15 * 60000));
+  let timeISO = frameTime.toISOString();
+  
+  document.getElementById('selectedTimeLabel').textContent = 'Looping: ' + timeISO.substr(11,5) + ' UTC';
+  
+  if (is3DActive) {
+    const bounds = map.getBounds();
+    const size = map.getSize();
+    const url = getWmsUrl(bounds, size.x, size.y) + `&TIME=${timeISO}`;
+    
+    textureLoader.load(url, (texture) => {
+      if (material3d.uniforms.uTexture.value) {
+        material3d.uniforms.uTexture.value.dispose();
+      }
+      texture.minFilter = THREE.LinearFilter;
+      material3d.uniforms.uTexture.value = texture;
+    });
+  } else if (activeOverlay) {
+    activeOverlay.setParams({ TIME: timeISO }, false);
+  }
+  
+  loopOffsetIndex++;
+  if (loopOffsetIndex > 0) loopOffsetIndex = -8;
+}
+
+document.getElementById('liveToggle').addEventListener('change', (e) => {
+  if (e.target.checked) {
+    loopOffsetIndex = -8;
+    liveRefreshInterval = setInterval(refreshActiveLayer, 1000);
+    refreshActiveLayer(); // Trigger first frame immediately
+    if (activeLayerKey !== 'gibs_viirs') {
+      document.getElementById('showingDate').textContent = 'Live Radar Loop';
+    }
+  } else {
+    clearInterval(liveRefreshInterval);
+    document.getElementById('selectedTimeLabel').textContent = 'Live';
+    if (activeLayerKey !== 'gibs_viirs') {
+      document.getElementById('showingDate').textContent = 'Live (real-time)';
+    }
+    // Restore to latest
+    if (activeOverlay && activeLayerKey !== 'none' && !is3DActive) {
+      activeOverlay.setParams({ TIME: undefined }, false);
+    }
+    if (is3DActive) update3DTexture();
+  }
+});
+
+// ================= OPACITY =================
+document.getElementById('opacitySlider').addEventListener('input', (e) => {
+  const val = e.target.value;
+  document.getElementById('opacityVal').textContent = val + '%';
+  if (activeOverlay) {
+    activeOverlay.setOpacity(val / 100);
+  }
+  if (is3DActive && material3d) {
+    material3d.uniforms.uOpacity.value = val / 100;
+  }
+});
+
+// ================= LAYER TOGGLE =================
+const layerBtn = document.getElementById('cloudLayerToggleBtn');
+const layerLabel = document.getElementById('cloudLayerToggleLabel');
+
+function updateLayerToggleUI() {
+  layerBtn.classList.toggle('active', layerVisible);
+  layerLabel.textContent = layerVisible ? 'Layer: On' : 'Layer: Off';
+}
+
+layerBtn.addEventListener('click', () => {
+  layerVisible = !layerVisible;
+  updateLayerToggleUI();
+  
+  if (is3DActive) {
+    if (layerVisible) {
+      document.getElementById('cloud3d').style.display = 'block';
+      update3DTexture();
+    } else {
+      document.getElementById('cloud3d').style.display = 'none';
+    }
+  } else if (activeOverlay) {
+    if (layerVisible) {
+      activeOverlay.addTo(map);
+    } else {
+      map.removeLayer(activeOverlay);
+    }
+  }
+});
+
+// ================= LAYER SWITCHER =================
+document.querySelectorAll('.layer-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.layer;
+    if (key === activeLayerKey) return;
+
+    const dateInput = document.getElementById('dateSelector').value || todayStr();
+    loadOverlay(key, dateInput);
+  });
+});
+
+// ================= TIMELINE =================
+const timeline = document.getElementById('timeline');
+let slotEls = {};
+
+function buildTimeline() {
+  timeline.innerHTML = '';
+  slotEls = {};
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - i);
+    const dateStr = ymd(d);
+    const el = document.createElement('div');
+    el.className = 'slot';
+    const label = i === 0 ? 'Today' : (i === 1 ? 'Yesterday' : `-${i}d`);
+    el.innerHTML = `<div class="t">${label}</div><div class="l">${dateStr}</div>`;
+    el.addEventListener('click', () => {
+      document.getElementById('dateSelector').value = dateStr;
+      if (activeLayerKey === 'gibs_viirs') {
+        loadOverlay('gibs_viirs', dateStr);
+      } else {
+        document.getElementById('selectedTimeLabel').textContent = i === 0 ? 'Live' : dateStr;
+      }
+      highlightActiveSlot(dateStr);
+    });
+    slotEls[dateStr] = el;
+    timeline.appendChild(el);
+  }
+}
+
+function highlightActiveSlot(dateStr) {
+  Object.values(slotEls).forEach(el => el.classList.remove('active'));
+  if (slotEls[dateStr]) slotEls[dateStr].classList.add('active');
+}
+
+// ================= INIT =================
+document.addEventListener('DOMContentLoaded', () => {
+  const today = todayStr();
+  document.getElementById('dateSelector').value = today;
+  document.getElementById('dateSelector').max = today;
+  document.getElementById('dateSelector').min = '2015-11-24';
+  buildTimeline();
+  // Load EUMETSAT Cloud Top Height by default
+  loadOverlay('eumetsat_cth');
+  highlightActiveSlot(today);
+});
+
+// ================= SIDEBAR TOGGLE =================
+document.getElementById('toggleSidebarNav').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+});
+document.getElementById('openSidebarBtn').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.remove('collapsed');
+});
+
+// ================= 3D CLOUDS (THREE.JS) =================
+function init3D() {
+  const canvas3d = document.getElementById('cloud3d');
+  renderer3d = new THREE.WebGLRenderer({ canvas: canvas3d, alpha: true, antialias: true });
+  renderer3d.setPixelRatio(window.devicePixelRatio);
+  renderer3d.setSize(window.innerWidth, window.innerHeight);
+
+  scene3d = new THREE.Scene();
+  camera3d = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  const geometry = new THREE.PlaneGeometry(2, 2);
+
+  const vertexShader = `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position, 1.0);
+    }
+  `;
+
+  const fragmentShader = `
+    uniform sampler2D uTexture;
+    uniform float uOpacity;
+    uniform vec2 uResolution;
+    uniform float uTime;
+    varying vec2 vUv;
+
+    // Convert EUMETSAT jet colormap to height (0.0 to 1.0)
+    float getHeight(vec2 uv) {
+      vec4 c = texture2D(uTexture, uv);
+      if(c.a < 0.1) return 0.0;
+      // Blue is low, Red is high.
+      float baseH = clamp((c.r - c.b + 1.0) * 0.5, 0.0, 1.0);
+      return baseH * c.a;
+    }
+
+    void main() {
+      vec4 texColor = texture2D(uTexture, vUv);
+      if(texColor.a < 0.05) discard;
+
+      float h = getHeight(vUv);
+
+      // Normal from height gradient (Bump mapping)
+      vec2 texel = 1.0 / uResolution;
+      float hL = getHeight(vUv - vec2(texel.x, 0.0));
+      float hR = getHeight(vUv + vec2(texel.x, 0.0));
+      float hU = getHeight(vUv - vec2(0.0, texel.y));
+      float hD = getHeight(vUv + vec2(0.0, texel.y));
+
+      // Scale height for normal intensity
+      float intensity = 4.0;
+      vec3 normal = normalize(vec3((hL - hR) * intensity, (hD - hU) * intensity, 1.0));
+
+      // Lighting setup
+      vec3 lightDir = normalize(vec3(-1.0, 1.0, 0.5)); // Sun from top-left
+      float diff = max(dot(normal, lightDir), 0.0);
+      float ambient = 0.5;
+
+      // Specular highlight for puffy cloud tops
+      vec3 viewDir = vec3(0.0, 0.0, 1.0);
+      vec3 halfDir = normalize(lightDir + viewDir);
+      float spec = pow(max(dot(normal, halfDir), 0.0), 16.0) * 0.5 * h;
+
+      // Drop shadow (sample height offset towards light)
+      float shadowHeight = getHeight(vUv + lightDir.xy * 0.03);
+      float shadow = smoothstep(0.0, 1.0, 1.0 - (shadowHeight - h) * 1.5);
+
+      vec3 color = texColor.rgb * (ambient + diff * 0.8 * shadow) + vec3(spec);
+      
+      // Soften edges and modulate alpha by height so low clouds are more transparent
+      float alpha = texColor.a * uOpacity * smoothstep(0.0, 0.15, h);
+
+      gl_FragColor = vec4(color, alpha);
+    }
+  `;
+
+  material3d = new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+    uniforms: {
+      uTexture: { value: null },
+      uOpacity: { value: 1.0 },
+      uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+      uTime: { value: 0.0 }
+    },
+    transparent: true,
+    depthWrite: false
+  });
+
+  plane3d = new THREE.Mesh(geometry, material3d);
+  scene3d.add(plane3d);
+
+  // Continuous animation loop for live feel
+  const clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    if (is3DActive && layerVisible) {
+      material3d.uniforms.uTime.value = clock.getElapsedTime();
+      renderer3d.render(scene3d, camera3d);
+    } else {
+      renderer3d.clear();
+    }
+  }
+  animate();
+
+  window.addEventListener('resize', () => {
+    renderer3d.setSize(window.innerWidth, window.innerHeight);
+    material3d.uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+    if(is3DActive) update3DTexture();
+  });
+}
+
+function getWmsUrl(bounds, width, height) {
+  const sw = L.CRS.EPSG3857.project(bounds.getSouthWest());
+  const ne = L.CRS.EPSG3857.project(bounds.getNorthEast());
+  const bbox = `${sw.x},${sw.y},${ne.x},${ne.y}`;
+  return `${EUMETSAT_WMS}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&BBOX=${bbox}&CRS=EPSG:3857&WIDTH=${Math.round(width)}&HEIGHT=${Math.round(height)}&LAYERS=msg_iodc:cth&STYLES=&FORMAT=image/png&TRANSPARENT=true`;
+}
+
+let textureLoader = new THREE.TextureLoader();
+textureLoader.setCrossOrigin('anonymous');
+
+function update3DTexture() {
+  if (!is3DActive || !layerVisible) {
+    if (renderer3d) renderer3d.clear();
+    return;
+  }
+  
+  const bounds = map.getBounds();
+  const size = map.getSize();
+  const url = getWmsUrl(bounds, size.x, size.y);
+  
+  document.getElementById('loadingIndicator').classList.add('show');
+  
+  textureLoader.load(url, (texture) => {
+    if (material3d.uniforms.uTexture.value) {
+      material3d.uniforms.uTexture.value.dispose();
+    }
+    texture.minFilter = THREE.LinearFilter;
+    material3d.uniforms.uTexture.value = texture;
+    
+    document.getElementById('loadingIndicator').classList.remove('show');
+    document.getElementById('tileStatusBadge').textContent = 'LOADED';
+    document.getElementById('tileStatusBadge').className = 'badge green';
+    document.getElementById('tileCount').textContent = '1 (3D WebGL)';
+  }, undefined, () => {
+    document.getElementById('loadingIndicator').classList.remove('show');
+    document.getElementById('tileStatusBadge').textContent = 'ERROR';
+    document.getElementById('tileStatusBadge').className = 'badge red';
+  });
+}
+
+// Hook into Leaflet events
+map.on('moveend', () => {
+  if (is3DActive) update3DTexture();
+});
+map.on('movestart', () => {
+  // Clear texture to avoid misalignment during pan
+  if (is3DActive && material3d.uniforms.uTexture.value) {
+     material3d.uniforms.uTexture.value = null;
+  }
+});
+
+init3D();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+product: MSGCTH
+format: netcdf4
+projection: geographic
+roi:
+  NSWE: [10.0, 5.0, 82.5, 78.0]   # North, South, East, West — Sri Lanka bbox with marginproduct: MSGCTH
+format: netcdf4
+projection: geographic
+roi:
+  NSWE: [10.0, 5.0, 82.5, 78.0]   # North, South, East, West — Sri Lanka bbox with margin
